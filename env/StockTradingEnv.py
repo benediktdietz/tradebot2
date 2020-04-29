@@ -22,12 +22,11 @@ class StockTradingEnv(gym.Env):
 
         self.past_horzion = int(self.settings['past_horzion'])
 
-        self.df = (self.df - self.df.min()) / (self.df.max() - self.df.min() + 1e-4)
-
-
         self.df.fillna(method ='pad') 
         self.df.fillna(0.) 
         self.df.replace(to_replace = np.nan, value = 0.)
+
+        # self.df = (self.df - self.df.min()) / (self.df.max() - self.df.min() + 1e-4)
 
         self.first_day = self.df.first_valid_index()
 
@@ -37,11 +36,6 @@ class StockTradingEnv(gym.Env):
             high = np.ones(3), 
             dtype = np.float16)
 
-        # self.observation_space = spaces.Box(
-        #     np.zeros(self.df.shape[1]-1), 
-        #     np.ones(self.df.shape[1]-1), 
-        #     dtype=np.float16)
-
         self.observation_space = spaces.Box(
             np.zeros(self.past_horzion), 
             np.ones(self.past_horzion), 
@@ -49,42 +43,64 @@ class StockTradingEnv(gym.Env):
 
 
     def _next_observation(self):
-    
-        return self.df['Close'].iloc[self.current_step-self.past_horzion:self.current_step].fillna(0.).astype(np.float32)
+
+        observation_vec = self.df['Close'].iloc[self.current_step-self.past_horzion:self.current_step].fillna(0.).astype(np.float32)
+        # observation_vec -= np.amin(observation_vec)
+        # observation_vec /= np.amax(observation_vec)
+        # observation_vec -= np.mean(observation_vec)
+        # observation_vec /= np.var(observation_vec)
+
+        if self.test:
+            return observation_vec.astype(np.float32)
+        else:
+            return observation_vec.astype(np.float32) #+ np.random.normal(0., 1e-3, (len(observation_vec))).astype(np.float32)
 
 
     def _take_action(self, action):
      
         self.current_price_original = self.df['Close'].iloc[self.current_step]
         
-        transation_fees = self.current_price_original * self.settings['transation_fee'] + .001
-
         self.action_probs = softmax(action)
+        buy_confidence = self.action_probs[0]
+        sell_confidence = self.action_probs[2]
 
         self.action = np.argmax(self.action_probs)
+
+        random_exploration = np.random.randint(0,3)
+        if np.random.uniform(0.,1.) > .8 or self.action == 1:
+            # self.action = random_exploration
+            self.action = 0
 
         # 0-buy | 1-hold | 2-sell
         if self.action == 0:
 
-            num_possible = np.floor((self.cash - self.settings['stop_below_balance']) / (self.current_price_original + transation_fees))
+            num_possible = np.floor((self.cash - self.settings['stop_below_balance']) / (self.current_price_original + 1e-5))
 
-            if num_possible >= 1:
+            position_size = int(np.floor(buy_confidence * num_possible))
 
-                position_size = np.floor(self.action_probs[0] * num_possible)
+            self.cash -= position_size * self.current_price_original
+            self.cash -= self.settings['transation_fee']
+            self.shares_held += position_size
 
-                self.cash -= position_size * (self.current_price_original + transation_fees)
-                self.shares_held += position_size
+            self.trades_done += 1
+
+            if self.test: print('bought ' + str(position_size) + ' at $' + str(self.current_price_original))
+
+        if self.action == 1:
+
+            if self.test: print('held position')
 
         if self.action == 2:
 
-            if self.shares_held >= 1:
+            position_size = np.int(np.floor(sell_confidence * self.shares_held))
 
-                position_size = np.int(np.round(self.action_probs[2] * self.shares_held))
+            self.cash += position_size * self.current_price_original
+            self.cash -= self.settings['transation_fee']
+            self.shares_held -= position_size
 
-                if position_size > 0:
+            self.trades_done += 1
 
-                    self.cash += position_size * (self.current_price_original - transation_fees)
-                    self.shares_held -= position_size
+            if self.test: print('sold ' + str(position_size) + ' at $' + str(self.current_price_original))
 
         self.equity = self.cash + self.shares_held * self.current_price_original
         self.value_in_shares = self.shares_held * self.current_price_original
@@ -96,11 +112,11 @@ class StockTradingEnv(gym.Env):
         self._take_action(action)
 
         self.current_step += 1       
-        self.steps_taken += 1     
+        self.steps_taken += 1
 
-        reward = self.equity
+        reward = self.equity - self.cash + self.shares_held #* self.current_step / self.settings['max_steps']
 
-        done = self.equity <= self.settings['stop_below_balance'] or self.current_step > len(self.df) - 1 or self.steps_taken > 365
+        done = self.equity <= self.settings['stop_below_balance'] or self.current_step > len(self.df) - 1 or self.steps_taken > self.settings['max_steps']
 
         if done: self.reset()
 
@@ -108,6 +124,7 @@ class StockTradingEnv(gym.Env):
 
         monitor_data = {
                 'equity': self.equity,
+                'trades_done': self.trades_done,
                 'shares_held': self.shares_held,
                 'value_in_shares': self.value_in_shares,
                 'cash': self.cash,
@@ -126,6 +143,8 @@ class StockTradingEnv(gym.Env):
         self.shares_held = 0
         self.value_in_shares = 0
 
+        self.trades_done = 0
+
         self.steps_taken = 0
 
         # self.equity = []
@@ -135,7 +154,7 @@ class StockTradingEnv(gym.Env):
         self.transations = 0
         
         if self.test: self.current_step = self.past_horzion
-        else: self.current_step = random.randint(self.past_horzion, len(self.df) - self.past_horzion)
+        else: self.current_step = random.randint(self.past_horzion, len(self.df) - self.past_horzion - self.settings['max_steps'])
 
         return self._next_observation()
 
