@@ -19,6 +19,8 @@ from chainerrl import misc
 from chainerrl.optimizers.nonbias_weight_decay import NonbiasWeightDecay
 from chainer import serializers
 
+os.system('clear')
+
 from env.StockTradingEnv import StockTradingEnv
 
 import quandl
@@ -40,7 +42,7 @@ class rl_stock_trader():
 
 	def __init__(self):
 
-		run_name = 'run1'
+		run_name = 'run_test'
 		self.outdir = './results/' + run_name + '/'
 		self.outdir_train = self.outdir + 'train/'
 		self.outdir_test = self.outdir + 'test/'
@@ -53,26 +55,24 @@ class rl_stock_trader():
 		except Exception: 
 			pass
 
-
 		self.writer_train = SummaryWriter(self.outdir_train)
 		self.writer_test = SummaryWriter(self.outdir_test)
 
-
-		self.monitor_freq = 5
-		self.testing_samples = 16
+		self.monitor_freq = 100
+		self.testing_samples = 100
 
 		self.validation_scores = []
+		self.training_scores = []
 
 		self.settings = {
-			'past_horzion': 64,
+			'past_horzion': 100,
 			'max_steps': 365,
-			'inital_account_balance': 1e5,
+			'inital_account_balance': 1e4,
 			'stop_below_balance': 1e3,
 			'transation_fee': .1,
 			'years_training': 5,
 			'years_testing': 1,
 			}
-
 
 		testing_end = date.today()
 		testing_beginning = testing_end - relativedelta(years=self.settings['years_testing']) - relativedelta(days=self.settings['past_horzion'])
@@ -86,10 +86,45 @@ class rl_stock_trader():
 			'test_gold': self.get_prices(gold_shanghai, 1, testing_beginning, testing_end),
 			'test_copper': self.get_prices(copper_shanghai, 1, testing_beginning, testing_end),
 			'test_aluminum': self.get_prices(aluminum_shanghai, 1, testing_beginning, testing_end),
+			'test_soybean_oil': self.get_prices(soybean_oil, 1, testing_beginning, testing_end),
+			'test_dax_futures': self.get_prices(dax_futures, 1, testing_beginning, testing_end),
+			'test_corn': self.get_prices(corn, 1, testing_beginning, testing_end),
+			'test_canadian_dollar': self.get_prices(canadian_dollar, 1, testing_beginning, testing_end),
 			}
 
+		# print('\n\n*************\n', self.data['test_corn'], '\n\n')
+
+		self.env_test_gold = StockTradingEnv(
+			self.get_prices(gold_shanghai, 1, testing_beginning, testing_end), 
+			self.settings, 
+			test=True)
+		self.env_test_copper = StockTradingEnv(
+			self.get_prices(copper_shanghai, 1, testing_beginning, testing_end), 
+			self.settings, 
+			test=True)
+		self.env_test_aluminum = StockTradingEnv(
+			self.get_prices(aluminum_shanghai, 1, testing_beginning, testing_end), 
+			self.settings, 
+			test=True)
+		self.env_test_soy_bean = StockTradingEnv(
+			self.get_prices(soybean_oil, 1, testing_beginning, testing_end), 
+			self.settings, 
+			test=True)
+		self.env_test_dax = StockTradingEnv(
+			self.get_prices(dax_futures, 1, testing_beginning, testing_end), 
+			self.settings, 
+			test=True)
+		self.env_test_corn = StockTradingEnv(
+			self.get_prices(corn, 1, testing_beginning, testing_end), 
+			self.settings, 
+			test=True)
+		self.env_test_canadian_dollar = StockTradingEnv(
+			self.get_prices(canadian_dollar, 1, testing_beginning, testing_end), 
+			self.settings, 
+			test=True)
+
 		self.env_train = StockTradingEnv(self.data['train_gold'], self.settings, test=False)
-		self.env_test = StockTradingEnv(self.data['test_gold'], self.settings, test=True)
+		# self.env_test = StockTradingEnv(self.data['test_gold'], self.settings, test=True)
 
 		self.test_envs = {
 			'gold': StockTradingEnv(self.data['test_gold'], self.settings, test=True),
@@ -98,17 +133,7 @@ class rl_stock_trader():
 			}
 
 
-
-		plt.figure()
-		plt.plot(self.data['train_gold']['Close'], label='train')
-		plt.plot(self.data['test_gold']['Close'], label='test')
-		plt.grid()
-		plt.show()
-
-
 		self.agent = self.rl_agent(self.env_train)
-
-
 
 	def get_prices(self, index, depth, start, end):
 
@@ -169,6 +194,7 @@ class rl_stock_trader():
 			# F.dropout(ratio=.5),
 			F.sigmoid,
 			L.Linear(None, 1),
+			F.sigmoid,
 		)
 
 		# self.vf = chainer.Sequential(
@@ -185,7 +211,7 @@ class rl_stock_trader():
 		# Combine a policy and a value function into a single model
 		self.model = chainerrl.links.Branched(self.policy, self.vf)
 
-		self.opt = chainer.optimizers.Adam(alpha=1e-3, eps=1e-5)
+		self.opt = chainer.optimizers.Adam(alpha=3e-3, eps=1e-5)
 		self.opt.setup(self.model)
 
 
@@ -193,8 +219,8 @@ class rl_stock_trader():
 					self.opt,
 					# obs_normalizer=obs_normalizer,
 					gpu=-1,
-					update_interval=16,
-					minibatch_size=8,
+					update_interval=64,
+					minibatch_size=32,
 					clip_eps_vf=None, 
 					entropy_coef=0.001,
 					# standardize_advantages=args.standardize_advantages,
@@ -232,11 +258,21 @@ class rl_stock_trader():
 
 
 		if name in ['mean', 'max', 'final']:
-			ylimits = [.5 * np.amin(benchmark), 3. * np.amax(benchmark)]
+			ylimits = [.75 * np.amin(benchmark), 1.5 * np.amax(benchmark)]
 		elif name == 'min':
 			ylimits = [0., self.settings['inital_account_balance']]
 		
 		plotcolor = 'darkgreen'
+
+		plt.figure(figsize=(18,18))
+		plt.scatter(np.asarray(self.validation_scores)[:,0], np.asarray(self.validation_scores)[:,index])
+		plt.grid()
+		plt.ylim(ylimits[0], ylimits[1])
+		plt.title(name + ' equity statistics over 1 year')
+		plt.xlabel('trained episodes')
+		plt.ylabel('equity [$]')
+		plt.savefig(self.outdir + test_data_label + '/scatter_' + name + '_equity.pdf')
+		plt.close()
 
 		area_plots = []
 		box_data = []
@@ -303,38 +339,85 @@ class rl_stock_trader():
 
 	def validate(self, episode, counter, test_data_label):
 
-		print('\nvalidation...')
-
-
 		try: 
 			os.mkdir(self.outdir + test_data_label + '/')
 		except Exception: 
 			pass
 
 		test_equity = []
-		test_equity_i = []
+		test_trades_buy = []
+		test_trades_sell = []
 
 		test_data = self.data['test_' + test_data_label]
+		try:
+			benchmark = test_data['Close'].values[self.settings['past_horzion']:]
+		except KeyError:
+			benchmark = test_data['Settle'].values[self.settings['past_horzion']:]
+		benchmark /= benchmark[0]
+		benchmark *= self.settings['inital_account_balance']
 
 		plt.figure(figsize=(18,18))
 
 		for i in range(0, self.testing_samples):
 
-			obs = self.env_test.reset()
-			# obs = self.test_envs[test_data_label].reset()
+			if test_data_label == 'gold':
+				obs = self.env_test_gold.reset()
+			if test_data_label == 'copper':
+				obs = self.env_test_copper.reset()
+			if test_data_label == 'aluminum':
+				obs = self.env_test_aluminum.reset()
+			if test_data_label == 'soybean_oil':
+				obs = self.env_test_soy_bean.reset()
+			if test_data_label == 'dax_futures':
+				obs = self.env_test_dax.reset()
+			if test_data_label == 'corn':
+				obs = self.env_test_corn.reset()
+			if test_data_label == 'corn':
+				obs = self.env_test_corn.reset()
+			if test_data_label == 'canadian_dollar':
+				obs = self.env_test_canadian_dollar.reset()
+
+			# obs = self.env_test.reset()
 
 			reward = 0
 			done = False
-			R = 0  # return (sum of rewards)
-			t = 0  # time step
+			R = 0
+			t = 0
 
 
 			while not done:
 
 				action = self.agent.act(obs)
-				# obs, reward, done, _, monitor_data = self.test_envs[test_data_label].step(action)
-				obs, reward, done, _, monitor_data = self.env_test.step(action)
+
+
+				if test_data_label == 'gold':
+					obs, reward, done, _, monitor_data = self.env_test_gold.step(action)
+				if test_data_label == 'copper':
+					obs, reward, done, _, monitor_data = self.env_test_copper.step(action)
+				if test_data_label == 'aluminum':
+					obs, reward, done, _, monitor_data = self.env_test_aluminum.step(action)
+				if test_data_label == 'soybean_oil':
+					obs, reward, done, _, monitor_data = self.env_test_soy_bean.step(action)
+				if test_data_label == 'dax_futures':
+					obs, reward, done, _, monitor_data = self.env_test_dax.step(action)
+				if test_data_label == 'corn':
+					obs, reward, done, _, monitor_data = self.env_test_corn.step(action)
+				if test_data_label == 'canadian_dollar':
+					obs, reward, done, _, monitor_data = self.env_test_canadian_dollar.step(action)
+
+				# obs, reward, done, _, monitor_data = self.env_test.step(action)
+
+
 				test_equity.append(monitor_data['equity'])
+
+				action_choice = np.argmax(softmax(action))
+				action_confidence = softmax(action)[action_choice]
+				if action_confidence > .8:
+					if action_choice == 0:
+						test_trades_buy.append([t, monitor_data['equity']])
+					if action_choice == 2:
+						test_trades_sell.append([t, monitor_data['equity']])
+
 				self.monitor_training(self.writer_test, t, i, done, action, monitor_data, counter)
 
 				R += reward
@@ -342,22 +425,25 @@ class rl_stock_trader():
 
 				if done:
 					test_equity = test_equity[:-1]
+
 					plt.plot(test_equity[:-1], linewidth=1)
+					# try:
+					# 	plt.scatter(np.asarray(test_trades_buy)[:,0], np.asarray(test_trades_buy)[:,1], marker='X', c='green', s=5)
+					# 	plt.scatter(np.asarray(test_trades_sell)[:,0], np.asarray(test_trades_sell)[:,1], marker='X', c='red', s=5)
+					# except IndexError:
+					# 	pass
+
 					self.validation_scores.append([counter, np.mean(test_equity), np.amin(test_equity), np.amax(test_equity), test_equity[-1]])
 					test_equity = []
 
 					self.agent.stop_episode()
 
 
-		benchmark = test_data['Close'].values[self.settings['past_horzion']:]
-		benchmark /= benchmark[0]
-		benchmark *= self.settings['inital_account_balance']
-
 		time_axis = test_data.index[self.settings['past_horzion']:].date
 		time_axis_short = time_axis[::10]
 
 		plt.plot(benchmark , linewidth=3, color='k', label='close')
-		plt.ylim(.5 * np.amin(benchmark), 3. * np.amax(benchmark))
+		plt.ylim(.75 * np.amin(benchmark), 1.5 * np.amax(benchmark))
 		plt.xticks(np.linspace(0, len(time_axis), len(time_axis_short)-1), time_axis_short, rotation=90)
 		plt.grid()
 		plt.title(test_data_label + ' validation runs at episode ' + str(episode))
@@ -374,7 +460,6 @@ class rl_stock_trader():
 
 	def train(self):
 
-
 		print('\nstart training loop\n')
 
 		def check_types(input, inputname):
@@ -387,6 +472,8 @@ class rl_stock_trader():
 		log_data = []
 		action_log = []
 
+		debug_printing = False
+
 
 		for i in range(0, n_episodes + 1):
 
@@ -396,9 +483,6 @@ class rl_stock_trader():
 			done = False
 			R = 0  # return (sum of rewards)
 			t = 0  # time step
-
-
-			print('\nepisode ' + str(i))
 
 
 			while not done:
@@ -427,25 +511,38 @@ class rl_stock_trader():
 			
 				if done:
 					if i % 10 == 0:
-						print('\nrollout ' + str(i) + '\n', pd.DataFrame(log_data).mean())
+						print('\nrollout ' + str(i) + '\n', pd.DataFrame(log_data).max())
 					log_data = []
+					self.training_scores.append([i, R])
 					self.training_counter += 1
-
-			if i % self.monitor_freq != 0:
-
-				self.agent.stop_episode()
+			
+			self.agent.stop_episode()
 
 			if i % self.monitor_freq == 0:
 
-				self.agent.stop_episode_and_train(obs, reward, done)
+				# self.agent.stop_episode_and_train(obs, reward, done)
 
 				# print('\n\nvalidation...')
 				self.validate(i, self.training_counter, 'gold')
-				# self.validate(i, self.training_counter, 'copper')
-				# self.validate(i, self.training_counter, 'aluminum')
+				if debug_printing: print('\n\n****************\nSOY BEANS\n\n')
+				self.validate(i, self.training_counter, 'soybean_oil')
+				if debug_printing: print('\n\n****************\nCORN\n\n')
+				self.validate(i, self.training_counter, 'corn')
+				# if debug_printing: print('\n\n****************\nCANADIAN DOLLAR\n\n')
+				# self.validate(i, self.training_counter, 'canadian_dollar')
+
+				if debug_printing: print('\n****************\n')
 
 				act_probs = softmax(np.asarray(action_log)[:,1:], axis=1)
 
+				plt.figure()
+				plt.scatter(np.asarray(self.training_scores)[:,0], np.asarray(self.training_scores)[:,1], s=2, label='reward')
+				plt.legend()
+				plt.title('reward')
+				plt.grid()
+				plt.savefig(self.outdir + 'reward.pdf')
+				plt.close()
+			
 				plt.figure()
 				plt.scatter(np.asarray(action_log)[:,0], act_probs[:,0], label='action0')
 				plt.scatter(np.asarray(action_log)[:,0], act_probs[:,1], label='action1')
